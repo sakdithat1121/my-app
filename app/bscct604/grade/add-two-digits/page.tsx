@@ -79,10 +79,10 @@ export default function AddTwoDigitsPage() {
             </p>
           </div>
           <Link
-            href="/bscct604"
+            href="http://10.70.163.2:3000/"
             className="text-xs sm:text-sm text-sky-300 hover:text-sky-200 underline-offset-4 hover:underline"
           >
-            ← กลับหน้าหลัก BSCCT604
+            ← กลับหน้าหลัก BSCCT604ัั
           </Link>
         </header>
 
