@@ -134,6 +134,24 @@ export default function BSCCT604Page() {
                   <span className="h-2 w-2 rounded-full bg-amber-300" />
                   เอกสารประกอบการสอน
                 </Link>
+
+                {/* ✅ เพิ่มเมนูใหม่: ไฟล์งาน */}
+                <Link
+                  href="/bscct604/works"
+                  className="inline-flex items-center gap-2 rounded-full border border-sky-400/70 bg-sky-500/15 px-3 py-1.5 text-sky-50 hover:bg-sky-500/25 hover:shadow-lg hover:shadow-sky-500/25 transition-all"
+                >
+                  <span className="h-2 w-2 rounded-full bg-sky-300" />
+                  ไฟล์งาน
+                </Link>
+
+                {/* ✅ เพิ่มเมนูใหม่: เกียรติบัตร */}
+                <Link
+                  href="/bscct604/certificates"
+                  className="inline-flex items-center gap-2 rounded-full border border-rose-400/70 bg-rose-500/15 px-3 py-1.5 text-rose-50 hover:bg-rose-500/25 hover:shadow-lg hover:shadow-rose-500/25 transition-all"
+                >
+                  <span className="h-2 w-2 rounded-full bg-rose-300" />
+                  เกียรติบัตร
+                </Link>
               </div>
             </nav>
           </div>
