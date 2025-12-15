@@ -2,91 +2,124 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 /* =======================
    Types
 ======================= */
 type WorkItem = {
-  id: string; // ใช้เป็น key ใน IndexedDB ด้วย
+  id: string;
   title: string;
   fileName: string;
   fileType: string;
   size: number;
   addedAt: number;
+  url: string; // ✅ เปิดจาก public/url ตรงๆ
 };
 
 type WorkGroup = {
   id: string;
   name: string;
+  locked?: boolean; // กันลบกลุ่มระบบ
   items: WorkItem[];
 };
 
 /* =======================
-   Simple UID (no crypto.randomUUID)
+   Simple UID
 ======================= */
 const uid = () =>
   `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 
 /* =======================
-   Storage Keys
+   LocalStorage Key
 ======================= */
-const LS_KEY = "bscct604-works-groups-v1";
+const LS_KEY = "bscct604-works-groups-v2-public";
 
 /* =======================
-   IndexedDB (store blobs)
+   Helpers
 ======================= */
-const DB_NAME = "bscct604-works-db";
-const DB_VERSION = 1;
-const STORE_FILES = "files";
-
-function openDB(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onerror = () => reject(req.error);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains(STORE_FILES)) {
-        db.createObjectStore(STORE_FILES);
-      }
-    };
-    req.onsuccess = () => resolve(req.result);
-  });
+function isPDF(type: string, name: string) {
+  const t = (type || "").toLowerCase();
+  if (t.includes("pdf")) return true;
+  return name.toLowerCase().endsWith(".pdf");
 }
 
-async function idbPutBlob(key: string, value: Blob): Promise<void> {
-  const db = await openDB();
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(STORE_FILES, "readwrite");
-    tx.onerror = () => reject(tx.error);
-    tx.oncomplete = () => resolve();
-    tx.objectStore(STORE_FILES).put(value, key);
-  });
-  db.close();
+function isImage(type: string, name: string) {
+  const t = (type || "").toLowerCase();
+  if (t.startsWith("image/")) return true;
+  const n = name.toLowerCase();
+  return (
+    n.endsWith(".png") ||
+    n.endsWith(".jpg") ||
+    n.endsWith(".jpeg") ||
+    n.endsWith(".webp") ||
+    n.endsWith(".gif")
+  );
 }
 
-async function idbGetBlob(key: string): Promise<Blob | null> {
-  const db = await openDB();
-  const blob = await new Promise<Blob | null>((resolve, reject) => {
-    const tx = db.transaction(STORE_FILES, "readonly");
-    tx.onerror = () => reject(tx.error);
-    const req = tx.objectStore(STORE_FILES).get(key);
-    req.onerror = () => reject(req.error);
-    req.onsuccess = () => resolve((req.result as Blob) ?? null);
-  });
-  db.close();
-  return blob;
+function guessTypeFromName(nameOrUrl: string) {
+  const n = (nameOrUrl || "").toLowerCase();
+  if (n.endsWith(".pdf")) return "application/pdf";
+  if (n.endsWith(".png")) return "image/png";
+  if (n.endsWith(".jpg") || n.endsWith(".jpeg")) return "image/jpeg";
+  if (n.endsWith(".webp")) return "image/webp";
+  if (n.endsWith(".gif")) return "image/gif";
+  return "application/octet-stream";
 }
 
-async function idbDelete(key: string): Promise<void> {
-  const db = await openDB();
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(STORE_FILES, "readwrite");
-    tx.onerror = () => reject(tx.error);
-    tx.oncomplete = () => resolve();
-    tx.objectStore(STORE_FILES).delete(key);
-  });
-  db.close();
+function fileNameFromUrl(url: string) {
+  try {
+    const u = new URL(
+      url,
+      typeof window !== "undefined"
+        ? window.location.origin
+        : "http://localhost"
+    );
+    const p = u.pathname.split("/").filter(Boolean);
+    return p[p.length - 1] || "file";
+  } catch {
+    const parts = url.split("/").filter(Boolean);
+    return parts[parts.length - 1] || "file";
+  }
+}
+
+function prettySize(bytes: number) {
+  const b = Number(bytes || 0);
+  if (!b) return "-";
+  if (b < 1024) return `${b} B`;
+  const kb = b / 1024;
+  if (kb < 1024) return `${kb.toFixed(1)} KB`;
+  const mb = kb / 1024;
+  if (mb < 1024) return `${mb.toFixed(1)} MB`;
+  const gb = mb / 1024;
+  return `${gb.toFixed(2)} GB`;
+}
+
+/* =======================
+   ✅ STATIC FILE IN public
+   public/bscct604/works/week-01.pdf
+   => URL: /bscct604/works/week-01.pdf
+======================= */
+const STATIC_GROUP: WorkGroup = {
+  id: "public-works",
+  name: "ไฟล์ในโฟลเดอร์ public/bscct604/works",
+  locked: true,
+  items: [
+    {
+      id: "week-01",
+      title: "งานสัปดาห์ที่ 1",
+      fileName: "week-01.pdf",
+      fileType: "application/pdf",
+      size: 0,
+      addedAt: Date.now(),
+      url: "/bscct604/works/week-01.pdf", // ✅ เปิดไฟล์ตรงจาก public
+    },
+  ],
+};
+
+function mergeWithStatic(saved: WorkGroup[]) {
+  const withoutStatic = (saved || []).filter((g) => g.id !== STATIC_GROUP.id);
+  return [STATIC_GROUP, ...withoutStatic];
 }
 
 /* =======================
@@ -98,38 +131,31 @@ export default function WorksPage() {
   const [groups, setGroups] = useState<WorkGroup[]>([]);
   const [groupName, setGroupName] = useState("");
 
-  // Viewer state
+  // Viewer
   const [viewerOpen, setViewerOpen] = useState(false);
   const [viewerTitle, setViewerTitle] = useState("");
   const [viewerFileName, setViewerFileName] = useState("");
   const [viewerType, setViewerType] = useState("");
   const [viewerUrl, setViewerUrl] = useState<string | null>(null);
-  const [viewerLoading, setViewerLoading] = useState(false);
 
-  // cleanup objectURL
-  const lastUrlRef = useRef<string | null>(null);
-  useEffect(() => {
-    return () => {
-      if (lastUrlRef.current) URL.revokeObjectURL(lastUrlRef.current);
-    };
-  }, []);
-
-  /* ---------- Load groups from localStorage ---------- */
+  /* ---------- Load ---------- */
   useEffect(() => {
     const raw = localStorage.getItem(LS_KEY);
-    if (raw) {
-      try {
-        setGroups(JSON.parse(raw));
-      } catch {
-        setGroups([]);
-      }
-    } else {
-      setGroups([]);
+    if (!raw) {
+      setGroups([STATIC_GROUP]);
+      return;
+    }
+    try {
+      const parsed = JSON.parse(raw) as WorkGroup[];
+      setGroups(mergeWithStatic(Array.isArray(parsed) ? parsed : []));
+    } catch {
+      setGroups([STATIC_GROUP]);
     }
   }, []);
 
-  /* ---------- Persist groups to localStorage ---------- */
+  /* ---------- Persist (เก็บเฉพาะกลุ่มที่ไม่ใช่ locked ก็ได้ แต่เก็บทั้งหมดก็ไม่เป็นไร) ---------- */
   useEffect(() => {
+    if (!groups.length) return;
     localStorage.setItem(LS_KEY, JSON.stringify(groups));
   }, [groups]);
 
@@ -146,38 +172,30 @@ export default function WorksPage() {
     setGroupName("");
   };
 
-  /* ---------- Remove group (and delete its blobs) ---------- */
-  const removeGroup = async (groupId: string) => {
-    const target = groups.find((g) => g.id === groupId);
-    if (!target) return;
-
-    // delete blobs first
-    await Promise.all(target.items.map((it) => idbDelete(it.id)));
-
-    setGroups((prev) => prev.filter((g) => g.id !== groupId));
+  /* ---------- Remove group ---------- */
+  const removeGroup = (groupId: string) => {
+    const g = groups.find((x) => x.id === groupId);
+    if (!g || g.locked) return; // ✅ กันลบกลุ่มไฟล์ public
+    setGroups((prev) => prev.filter((x) => x.id !== groupId));
   };
 
-  /* ---------- Add file (store blob to IndexedDB) ---------- */
-  const addFileToGroup = async (
-    groupId: string,
-    title: string,
-    file?: File
-  ) => {
+  /* ---------- Add item by URL ---------- */
+  const addLinkToGroup = (groupId: string, title: string, url: string) => {
     const t = title.trim();
-    if (!t || !file) return;
+    const u = url.trim();
+    if (!t || !u) return;
 
-    const id = uid();
-
-    // store blob
-    await idbPutBlob(id, file);
+    const fileName = fileNameFromUrl(u);
+    const fileType = guessTypeFromName(fileName);
 
     const item: WorkItem = {
-      id,
+      id: uid(),
       title: t,
-      fileName: file.name,
-      fileType: file.type || "application/octet-stream",
-      size: file.size,
+      fileName,
+      fileType,
+      size: 0,
       addedAt: Date.now(),
+      url: u,
     };
 
     setGroups((prev) =>
@@ -188,43 +206,25 @@ export default function WorksPage() {
   };
 
   /* ---------- Remove file ---------- */
-  const removeFile = async (groupId: string, itemId: string) => {
-    await idbDelete(itemId);
+  const removeFile = (groupId: string, itemId: string) => {
+    const g = groups.find((x) => x.id === groupId);
+    if (g?.locked) return; // กันลบไฟล์ในกลุ่ม public (ถ้าต้องการให้ลบได้ เอาบรรทัดนี้ออก)
     setGroups((prev) =>
-      prev.map((g) =>
-        g.id === groupId
-          ? { ...g, items: g.items.filter((it) => it.id !== itemId) }
-          : g
+      prev.map((gg) =>
+        gg.id === groupId
+          ? { ...gg, items: gg.items.filter((it) => it.id !== itemId) }
+          : gg
       )
     );
   };
 
-  /* ---------- Open viewer (read blob from IndexedDB) ---------- */
-  const openViewer = async (item: WorkItem) => {
+  /* ---------- Open viewer (✅ เปิด url ตรงๆ) ---------- */
+  const openViewer = (item: WorkItem) => {
     setViewerOpen(true);
     setViewerTitle(item.title);
     setViewerFileName(item.fileName);
-    setViewerType(item.fileType);
-    setViewerLoading(true);
-
-    // cleanup old url
-    if (lastUrlRef.current) {
-      URL.revokeObjectURL(lastUrlRef.current);
-      lastUrlRef.current = null;
-    }
-    setViewerUrl(null);
-
-    const blob = await idbGetBlob(item.id);
-    if (!blob) {
-      setViewerLoading(false);
-      setViewerUrl(null);
-      return;
-    }
-
-    const url = URL.createObjectURL(blob);
-    lastUrlRef.current = url;
-    setViewerUrl(url);
-    setViewerLoading(false);
+    setViewerType(item.fileType || guessTypeFromName(item.fileName));
+    setViewerUrl(item.url);
   };
 
   const closeViewer = () => {
@@ -232,12 +232,6 @@ export default function WorksPage() {
     setViewerTitle("");
     setViewerFileName("");
     setViewerType("");
-    setViewerLoading(false);
-
-    if (lastUrlRef.current) {
-      URL.revokeObjectURL(lastUrlRef.current);
-      lastUrlRef.current = null;
-    }
     setViewerUrl(null);
   };
 
@@ -262,8 +256,8 @@ export default function WorksPage() {
                   ไฟล์งาน (Assignments / Works)
                 </h1>
                 <p className="text-sm text-slate-300">
-                  เพิ่มหัวข้อ + เพิ่มเอกสาร + เปิดดูได้ทันทีในหน้านี้
-                  (เก็บไฟล์จริงใน IndexedDB)
+                  ✅ เปิดไฟล์จาก <span className="text-sky-200">public/</span>{" "}
+                  ได้ตรงๆ (เช่น week-01.pdf)
                 </p>
               </div>
 
@@ -293,7 +287,7 @@ export default function WorksPage() {
                   <input
                     value={groupName}
                     onChange={(e) => setGroupName(e.target.value)}
-                    placeholder="เช่น งานสัปดาห์ที่ 1 / Lab / Final"
+                    placeholder="เช่น งานสัปดาห์ / Lab / Final"
                     className="flex-1 rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:border-sky-500/60"
                   />
                   <button
@@ -305,8 +299,8 @@ export default function WorksPage() {
                 </div>
 
                 <p className="mt-3 text-xs text-slate-400">
-                  * หัวข้อ/รายการเก็บใน localStorage, ตัวไฟล์เก็บใน IndexedDB
-                  (รีเฟรชไม่หาย)
+                  * ไฟล์ week-01.pdf ถูกฝังไว้แล้วในกลุ่ม
+                  “public/bscct604/works”
                 </p>
               </section>
 
@@ -326,7 +320,7 @@ export default function WorksPage() {
                 </div>
 
                 <p className="mt-3 text-xs text-slate-400">
-                  เปิดดู PDF/รูปในหน้าได้ทันที • ไฟล์อื่นจะเป็นดาวน์โหลด
+                  PDF/รูป: พรีวิวในหน้าได้ • ไฟล์อื่น: เปิดแท็บใหม่/ดาวน์โหลด
                 </p>
               </section>
             </div>
@@ -337,7 +331,7 @@ export default function WorksPage() {
         <section className="space-y-4">
           {groups.length === 0 ? (
             <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5 text-slate-300">
-              ยังไม่มีหัวข้อ → สร้างหัวข้อด้านบนก่อน แล้วค่อยเพิ่มเอกสารได้เลย
+              ยังไม่มีข้อมูล
             </div>
           ) : (
             groups.map((group) => (
@@ -349,28 +343,43 @@ export default function WorksPage() {
                   <div>
                     <h2 className="text-lg font-semibold text-slate-100">
                       {group.name}
+                      {group.locked && (
+                        <span className="ml-2 text-xs text-slate-400">
+                          (ระบบ)
+                        </span>
+                      )}
                     </h2>
                     <p className="text-sm text-slate-300 mt-1">
-                      เพิ่มไฟล์แล้วกด “ดูเอกสาร” เพื่อเปิดในหน้านี้
+                      กด “ดูเอกสาร” เพื่อเปิดไฟล์ในหน้านี้
                     </p>
                   </div>
 
                   <button
                     onClick={() => removeGroup(group.id)}
-                    className="inline-flex items-center gap-2 rounded-full border border-rose-400/50 bg-rose-500/10 px-3 py-1.5 text-rose-100 hover:bg-rose-500/20"
-                    title="ลบหัวข้อและไฟล์ทั้งหมดในหัวข้อนี้"
+                    disabled={!!group.locked}
+                    className="inline-flex items-center gap-2 rounded-full border border-rose-400/50 bg-rose-500/10 px-3 py-1.5 text-rose-100 hover:bg-rose-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                    title={group.locked ? "กลุ่มนี้ลบไม่ได้" : "ลบหัวข้อ"}
                   >
                     ลบหัวข้อ
                   </button>
                 </div>
 
-                <div className="mt-4">
-                  <AddFileForm
-                    onAdd={(title, file) =>
-                      addFileToGroup(group.id, title, file)
-                    }
-                  />
-                </div>
+                {/* Add by URL (สำหรับกลุ่มที่ไม่ใช่ระบบ) */}
+                {!group.locked && (
+                  <div className="mt-4">
+                    <AddLinkForm
+                      onAdd={(title, url) =>
+                        addLinkToGroup(group.id, title, url)
+                      }
+                    />
+                    <p className="mt-2 text-xs text-slate-400">
+                      ตัวอย่าง URL:{" "}
+                      <span className="text-slate-200">
+                        /bscct604/works/week-02.pdf
+                      </span>
+                    </p>
+                  </div>
+                )}
 
                 {/* Items */}
                 <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -395,6 +404,9 @@ export default function WorksPage() {
                             <p className="text-[11px] text-slate-500">
                               {new Date(item.addedAt).toLocaleString()}
                             </p>
+                            <p className="text-[11px] text-slate-500 break-all">
+                              {item.url}
+                            </p>
                           </div>
 
                           <div className="flex flex-col gap-2 items-end">
@@ -404,13 +416,25 @@ export default function WorksPage() {
                             >
                               ดูเอกสาร
                             </button>
-                            <button
-                              onClick={() => removeFile(group.id, item.id)}
-                              className="text-xs rounded-full border border-rose-400/50 bg-rose-500/10 px-3 py-1.5 text-rose-100 hover:bg-rose-500/20"
-                              title="ลบไฟล์"
+
+                            <a
+                              href={item.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-xs rounded-full border border-emerald-400/60 bg-emerald-500/10 px-3 py-1.5 text-emerald-50 hover:bg-emerald-500/20"
                             >
-                              ลบ
-                            </button>
+                              เปิดแท็บใหม่
+                            </a>
+
+                            {!group.locked && (
+                              <button
+                                onClick={() => removeFile(group.id, item.id)}
+                                className="text-xs rounded-full border border-rose-400/50 bg-rose-500/10 px-3 py-1.5 text-rose-100 hover:bg-rose-500/20"
+                                title="ลบไฟล์"
+                              >
+                                ลบ
+                              </button>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -454,15 +478,11 @@ export default function WorksPage() {
               </div>
 
               <div className="p-4">
-                {viewerLoading ? (
-                  <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-6 text-slate-300">
-                    กำลังโหลดไฟล์...
-                  </div>
-                ) : !viewerUrl ? (
+                {!viewerUrl ? (
                   <div className="rounded-xl border border-rose-400/40 bg-rose-500/10 p-6 text-rose-100">
-                    ไม่พบไฟล์ใน IndexedDB (อาจถูกลบ / เคลียร์ข้อมูลเบราว์เซอร์)
+                    ไม่พบ URL ของไฟล์
                   </div>
-                ) : isImage(viewerType) ? (
+                ) : isImage(viewerType, viewerFileName) ? (
                   <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-3">
                     <img
                       src={viewerUrl}
@@ -482,14 +502,14 @@ export default function WorksPage() {
                   <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-6 space-y-3">
                     <p className="text-slate-200 text-sm">
                       ไฟล์ชนิดนี้ไม่สามารถพรีวิวในหน้าได้โดยตรง
-                      (สามารถดาวน์โหลดไปเปิดภายนอกได้)
                     </p>
                     <a
                       href={viewerUrl}
-                      download={viewerFileName}
+                      target="_blank"
+                      rel="noreferrer"
                       className="inline-flex items-center gap-2 rounded-full border border-emerald-400/60 bg-emerald-500/15 px-4 py-2 text-sm text-emerald-50 hover:bg-emerald-500/25"
                     >
-                      ดาวน์โหลดไฟล์ →
+                      เปิดไฟล์ →
                     </a>
                   </div>
                 )}
@@ -503,89 +523,49 @@ export default function WorksPage() {
 }
 
 /* =======================
-   AddFileForm
+   AddLinkForm
 ======================= */
-function AddFileForm({
+function AddLinkForm({
   onAdd,
 }: {
-  onAdd: (title: string, file?: File) => Promise<void> | void;
+  onAdd: (title: string, url: string) => void;
 }) {
   const [title, setTitle] = useState("");
-  const [file, setFile] = useState<File | undefined>();
-  const [busy, setBusy] = useState(false);
+  const [url, setUrl] = useState("");
 
-  const add = async () => {
-    if (!title.trim() || !file) return;
-    setBusy(true);
-    try {
-      await onAdd(title, file);
-      setTitle("");
-      setFile(undefined);
-      // reset input visually
-      const input = document.getElementById(
-        "file-input-reset"
-      ) as HTMLInputElement | null;
-      if (input) input.value = "";
-    } finally {
-      setBusy(false);
-    }
+  const add = () => {
+    if (!title.trim() || !url.trim()) return;
+    onAdd(title, url);
+    setTitle("");
+    setUrl("");
   };
 
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-950/30 p-4">
-      <p className="text-sm font-semibold text-slate-100">➕ เพิ่มเอกสาร</p>
+      <p className="text-sm font-semibold text-slate-100">
+        ➕ เพิ่มเอกสาร (ใส่ URL)
+      </p>
 
-      <div className="mt-3 flex flex-col sm:flex-row gap-2">
+      <div className="mt-3 flex flex-col gap-2">
         <input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder="ชื่อเอกสาร (เช่น งานสัปดาห์ที่ 1)"
-          className="flex-1 rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:border-sky-500/60"
+          placeholder="ชื่อเอกสาร (เช่น งานสัปดาห์ที่ 2)"
+          className="w-full rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:border-sky-500/60"
         />
         <input
-          id="file-input-reset"
-          type="file"
-          onChange={(e) => setFile(e.target.files?.[0])}
-          className="text-sm text-slate-200"
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder="URL ไฟล์ (เช่น /bscct604/works/week-02.pdf)"
+          className="w-full rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:border-sky-500/60"
         />
         <button
           onClick={add}
-          disabled={busy}
-          className="rounded-xl border border-emerald-400/60 bg-emerald-500/15 px-4 py-2 text-sm font-semibold text-emerald-50 hover:bg-emerald-500/25 disabled:opacity-60"
+          className="self-start rounded-xl border border-emerald-400/60 bg-emerald-500/15 px-4 py-2 text-sm font-semibold text-emerald-50 hover:bg-emerald-500/25"
         >
-          {busy ? "กำลังบันทึก..." : "บันทึก"}
+          บันทึก
         </button>
       </div>
-
-      <p className="mt-2 text-xs text-slate-400">
-        * ไฟล์จะถูกเก็บจริงใน IndexedDB (ถ้าล้างข้อมูลเบราว์เซอร์/Incognito
-        ไฟล์จะหาย)
-      </p>
     </div>
   );
-}
-
-/* =======================
-   Helpers
-======================= */
-function isPDF(type: string, name: string) {
-  const t = (type || "").toLowerCase();
-  if (t.includes("pdf")) return true;
-  return name.toLowerCase().endsWith(".pdf");
-}
-
-function isImage(type: string) {
-  const t = (type || "").toLowerCase();
-  return t.startsWith("image/");
-}
-
-function prettySize(bytes: number) {
-  const b = Number(bytes || 0);
-  if (b < 1024) return `${b} B`;
-  const kb = b / 1024;
-  if (kb < 1024) return `${kb.toFixed(1)} KB`;
-  const mb = kb / 1024;
-  if (mb < 1024) return `${mb.toFixed(1)} MB`;
-  const gb = mb / 1024;
-  return `${gb.toFixed(2)} GB`;
 }
