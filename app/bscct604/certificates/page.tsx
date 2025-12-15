@@ -14,13 +14,13 @@ type CertItem = {
   fileType: string;
   size: number;
   addedAt: number;
-  url: string; // ✅ เปิดจาก public/url ตรงๆ
+  url: string; // ✅ open direct from public
 };
 
 type CertGroup = {
   id: string;
   name: string;
-  locked?: boolean; // กันลบกลุ่มระบบ
+  locked?: boolean; // prevent deleting static group
   items: CertItem[];
 };
 
@@ -96,9 +96,9 @@ function prettySize(bytes: number) {
 }
 
 /* =======================
-   ✅ STATIC FILE IN public
-   public/bscct604/certificates/ใบประกาศฯ.pdf
-   => URL: /bscct604/certificates/ใบประกาศฯ.pdf
+   ✅ STATIC FILE (public)
+   public/bscct604/certificates/certificates.pdf
+   => /bscct604/certificates/certificates.pdf
 ======================= */
 const STATIC_GROUP: CertGroup = {
   id: "public-certificates",
@@ -106,13 +106,13 @@ const STATIC_GROUP: CertGroup = {
   locked: true,
   items: [
     {
-      id: "cert-001",
-      title: "ใบประกาศ",
-      fileName: "ใบประกาศฯ.pdf",
+      id: "certificates-pdf",
+      title: "ใบประกาศ / Certificates",
+      fileName: "certificates.pdf",
       fileType: "application/pdf",
       size: 0,
       addedAt: Date.now(),
-      url: "/bscct604/certificates/ใบประกาศฯ.pdf", // ✅ เปิดตรง
+      url: "/bscct604/certificates/certificates.pdf",
     },
   ],
 };
@@ -208,7 +208,7 @@ export default function CertificatesPage() {
   /* ---------- Remove file ---------- */
   const removeFile = (groupId: string, itemId: string) => {
     const g = groups.find((x) => x.id === groupId);
-    if (g?.locked) return; // กันลบของระบบ
+    if (g?.locked) return; // protect static group
     setGroups((prev) =>
       prev.map((gg) =>
         gg.id === groupId
@@ -218,13 +218,13 @@ export default function CertificatesPage() {
     );
   };
 
-  /* ---------- Open viewer (✅ เปิด url ตรงๆ + encode) ---------- */
+  /* ---------- Open viewer (direct url) ---------- */
   const openViewer = (item: CertItem) => {
     setViewerOpen(true);
     setViewerTitle(item.title);
     setViewerFileName(item.fileName);
     setViewerType(item.fileType || guessTypeFromName(item.fileName));
-    setViewerUrl(encodeURI(item.url)); // ✅ กันชื่อไทย/ฯ
+    setViewerUrl(encodeURI(item.url));
   };
 
   const closeViewer = () => {
@@ -257,7 +257,7 @@ export default function CertificatesPage() {
                 </h1>
                 <p className="text-sm text-slate-300">
                   ✅ เปิดไฟล์จาก <span className="text-rose-200">public/</span>{" "}
-                  ได้ตรงๆ (เช่น ใบประกาศฯ.pdf)
+                  ได้ตรงๆ (ตอนนี้ใช้ไฟล์ certificates.pdf)
                 </p>
               </div>
 
@@ -300,7 +300,7 @@ export default function CertificatesPage() {
                 </div>
 
                 <p className="mt-3 text-xs text-slate-400">
-                  * กลุ่ม “ใบประกาศ (public/...)” ถูกใส่ให้อัตโนมัติแล้ว
+                  * กลุ่ม “ใบประกาศ (public/...)” ใส่ให้อัตโนมัติแล้ว
                 </p>
               </section>
 
@@ -368,7 +368,7 @@ export default function CertificatesPage() {
                   <p className="mt-2 text-xs text-slate-400">
                     ตัวอย่าง URL:{" "}
                     <span className="text-slate-200">
-                      /bscct604/certificates/ใบประกาศฯ.pdf
+                      /bscct604/certificates/certificates.pdf
                     </span>
                   </p>
                 </div>
@@ -532,13 +532,13 @@ function AddLinkForm({
         <input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder="ชื่อเอกสาร (เช่น อบรม Network Security)"
+          placeholder="ชื่อเอกสาร (เช่น Certificates 2025)"
           className="w-full rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:border-rose-500/60"
         />
         <input
           value={url}
           onChange={(e) => setUrl(e.target.value)}
-          placeholder="URL ไฟล์ (เช่น /bscct604/certificates/ใบประกาศฯ.pdf)"
+          placeholder="URL ไฟล์ (เช่น /bscct604/certificates/certificates.pdf)"
           className="w-full rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:border-rose-500/60"
         />
         <button
