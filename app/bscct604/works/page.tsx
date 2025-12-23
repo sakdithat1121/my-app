@@ -14,7 +14,7 @@ type WorkItem = {
   fileType: string;
   size: number;
   addedAt: number;
-  url: string; // ✅ เปิดจาก public/url ตรงๆ
+  url: string; // เปิดจาก public/url ตรงๆ
 };
 
 type WorkGroup = {
@@ -41,13 +41,13 @@ const LS_KEY = "bscct604-works-groups-v2-public";
 function isPDF(type: string, name: string) {
   const t = (type || "").toLowerCase();
   if (t.includes("pdf")) return true;
-  return name.toLowerCase().endsWith(".pdf");
+  return (name || "").toLowerCase().endsWith(".pdf");
 }
 
 function isImage(type: string, name: string) {
   const t = (type || "").toLowerCase();
   if (t.startsWith("image/")) return true;
-  const n = name.toLowerCase();
+  const n = (name || "").toLowerCase();
   return (
     n.endsWith(".png") ||
     n.endsWith(".jpg") ||
@@ -78,7 +78,7 @@ function fileNameFromUrl(url: string) {
     const p = u.pathname.split("/").filter(Boolean);
     return p[p.length - 1] || "file";
   } catch {
-    const parts = url.split("/").filter(Boolean);
+    const parts = (url || "").split("/").filter(Boolean);
     return parts[parts.length - 1] || "file";
   }
 }
@@ -95,31 +95,101 @@ function prettySize(bytes: number) {
   return `${gb.toFixed(2)} GB`;
 }
 
-/* =======================
-   ✅ STATIC FILE IN public
-   public/bscct604/works/week-01.pdf
-   => URL: /bscct604/works/week-01.pdf
-======================= */
-const STATIC_GROUP: WorkGroup = {
-  id: "public-works",
-  name: "ไฟล์ในโฟลเดอร์ public/bscct604/works",
-  locked: true,
-  items: [
-    {
-      id: "week-01",
-      title: "งานสัปดาห์ที่ 1",
-      fileName: "week-01.pdf",
-      fileType: "application/pdf",
-      size: 0,
-      addedAt: Date.now(),
-      url: "/bscct604/works/week-01.pdf", // ✅ เปิดไฟล์ตรงจาก public
-    },
-  ],
-};
+/** ทำให้ url ใช้งานได้:
+ * - ถ้าเป็น absolute http(s) ใช้ได้เลย
+ * - ถ้าเป็น relative และไม่ขึ้นต้นด้วย "/" จะเติม "/" ให้
+ */
+function normalizeUrl(input: string) {
+  const u = (input || "").trim();
+  if (!u) return "";
+  if (/^https?:\/\//i.test(u)) return u;
+  if (u.startsWith("/")) return u;
+  return `/${u}`;
+}
 
+/* =======================
+   ✅ STATIC FILES IN public
+   public/bscct604/works/week-01.pdf -> /bscct604/works/week-01.pdf
+======================= */
+const STATIC_PUBLIC_GROUP_ID = "public-works";
+
+const STATIC_PUBLIC_ITEMS: WorkItem[] = [
+  {
+    id: "week-01",
+    title: "งานสัปดาห์ที่ 1",
+    fileName: "week-01.pdf",
+    fileType: "application/pdf",
+    size: 0,
+    addedAt: Date.now(),
+    url: "/bscct604/works/week-01.pdf",
+  },
+  {
+    id: "week-02",
+    title: "งานสัปดาห์ที่ 2",
+    fileName: "week-02.pdf",
+    fileType: "application/pdf",
+    size: 0,
+    addedAt: Date.now(),
+    url: "/bscct604/works/week-02.pdf",
+  },
+];
+
+function buildStaticGroup(): WorkGroup {
+  return {
+    id: STATIC_PUBLIC_GROUP_ID,
+    name: "ไฟล์ในโฟลเดอร์ public/bscct604/works",
+    locked: true,
+    items: STATIC_PUBLIC_ITEMS,
+  };
+}
+
+/** merge กลุ่มจาก localStorage เข้ากับกลุ่มระบบ (static)
+ * - ตัดกลุ่มที่ id ชนกับ static ออกก่อนเสมอ
+ */
 function mergeWithStatic(saved: WorkGroup[]) {
-  const withoutStatic = (saved || []).filter((g) => g.id !== STATIC_GROUP.id);
-  return [STATIC_GROUP, ...withoutStatic];
+  const cleaned = (saved || []).filter(
+    (g) => g?.id && g.id !== STATIC_PUBLIC_GROUP_ID
+  );
+  return [buildStaticGroup(), ...cleaned];
+}
+
+/** เพื่อกันข้อมูล localStorage พัง */
+function safeParseGroups(raw: string | null): WorkGroup[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    // sanitize minimal
+    return (
+      parsed
+        .filter((g) => g && typeof g === "object")
+        .map((g) => ({
+          id: String((g as any).id || uid()),
+          name: String((g as any).name || "ไม่ระบุชื่อ"),
+          locked: Boolean((g as any).locked),
+          items: Array.isArray((g as any).items)
+            ? (g as any).items.map((it: any) => ({
+                id: String(it?.id || uid()),
+                title: String(it?.title || "ไม่ระบุชื่อไฟล์"),
+                fileName: String(
+                  it?.fileName || fileNameFromUrl(String(it?.url || ""))
+                ),
+                fileType: String(
+                  it?.fileType ||
+                    guessTypeFromName(String(it?.fileName || it?.url || ""))
+                ),
+                size: Number(it?.size || 0),
+                addedAt: Number(it?.addedAt || Date.now()),
+                url: normalizeUrl(String(it?.url || "")),
+              }))
+            : [],
+        }))
+        // กันไม่ให้มี locked group ถูก save มาผิด ๆ (เลือกเก็บไว้ก็ได้ แต่เพื่อความสะอาด ตัดทิ้ง)
+        .filter((g) => !g.locked)
+    );
+  } catch {
+    return [];
+  }
 }
 
 /* =======================
@@ -141,26 +211,19 @@ export default function WorksPage() {
   /* ---------- Load ---------- */
   useEffect(() => {
     const raw = localStorage.getItem(LS_KEY);
-    if (!raw) {
-      setGroups([STATIC_GROUP]);
-      return;
-    }
-    try {
-      const parsed = JSON.parse(raw) as WorkGroup[];
-      setGroups(mergeWithStatic(Array.isArray(parsed) ? parsed : []));
-    } catch {
-      setGroups([STATIC_GROUP]);
-    }
+    const saved = safeParseGroups(raw);
+    setGroups(mergeWithStatic(saved));
   }, []);
 
-  /* ---------- Persist (เก็บเฉพาะกลุ่มที่ไม่ใช่ locked ก็ได้ แต่เก็บทั้งหมดก็ไม่เป็นไร) ---------- */
+  /* ---------- Persist: เก็บเฉพาะกลุ่มที่ user สร้าง (ไม่ locked) ---------- */
   useEffect(() => {
     if (!groups.length) return;
-    localStorage.setItem(LS_KEY, JSON.stringify(groups));
+    const toSave = groups.filter((g) => !g.locked);
+    localStorage.setItem(LS_KEY, JSON.stringify(toSave));
   }, [groups]);
 
   const totalFiles = useMemo(
-    () => groups.reduce((acc, g) => acc + g.items.length, 0),
+    () => groups.reduce((acc, g) => acc + (g.items?.length || 0), 0),
     [groups]
   );
 
@@ -175,16 +238,17 @@ export default function WorksPage() {
   /* ---------- Remove group ---------- */
   const removeGroup = (groupId: string) => {
     const g = groups.find((x) => x.id === groupId);
-    if (!g || g.locked) return; // ✅ กันลบกลุ่มไฟล์ public
+    if (!g || g.locked) return;
     setGroups((prev) => prev.filter((x) => x.id !== groupId));
   };
 
   /* ---------- Add item by URL ---------- */
   const addLinkToGroup = (groupId: string, title: string, url: string) => {
     const t = title.trim();
-    const u = url.trim();
-    if (!t || !u) return;
+    const u0 = url.trim();
+    if (!t || !u0) return;
 
+    const u = normalizeUrl(u0);
     const fileName = fileNameFromUrl(u);
     const fileType = guessTypeFromName(fileName);
 
@@ -200,7 +264,7 @@ export default function WorksPage() {
 
     setGroups((prev) =>
       prev.map((g) =>
-        g.id === groupId ? { ...g, items: [item, ...g.items] } : g
+        g.id === groupId ? { ...g, items: [item, ...(g.items || [])] } : g
       )
     );
   };
@@ -208,17 +272,17 @@ export default function WorksPage() {
   /* ---------- Remove file ---------- */
   const removeFile = (groupId: string, itemId: string) => {
     const g = groups.find((x) => x.id === groupId);
-    if (g?.locked) return; // กันลบไฟล์ในกลุ่ม public (ถ้าต้องการให้ลบได้ เอาบรรทัดนี้ออก)
+    if (g?.locked) return;
     setGroups((prev) =>
       prev.map((gg) =>
         gg.id === groupId
-          ? { ...gg, items: gg.items.filter((it) => it.id !== itemId) }
+          ? { ...gg, items: (gg.items || []).filter((it) => it.id !== itemId) }
           : gg
       )
     );
   };
 
-  /* ---------- Open viewer (✅ เปิด url ตรงๆ) ---------- */
+  /* ---------- Open viewer ---------- */
   const openViewer = (item: WorkItem) => {
     setViewerOpen(true);
     setViewerTitle(item.title);
@@ -257,7 +321,10 @@ export default function WorksPage() {
                 </h1>
                 <p className="text-sm text-slate-300">
                   ✅ เปิดไฟล์จาก <span className="text-sky-200">public/</span>{" "}
-                  ได้ตรงๆ (เช่น week-01.pdf)
+                  ได้ตรงๆ เช่น{" "}
+                  <span className="text-slate-100">
+                    /bscct604/works/week-01.pdf
+                  </span>
                 </p>
               </div>
 
@@ -299,8 +366,8 @@ export default function WorksPage() {
                 </div>
 
                 <p className="mt-3 text-xs text-slate-400">
-                  * ไฟล์ week-01.pdf ถูกฝังไว้แล้วในกลุ่ม
-                  “public/bscct604/works”
+                  * กลุ่มระบบ (public/bscct604/works) ถูกล็อก และจะไม่ถูกเก็บใน
+                  localStorage
                 </p>
               </section>
 
@@ -375,7 +442,11 @@ export default function WorksPage() {
                     <p className="mt-2 text-xs text-slate-400">
                       ตัวอย่าง URL:{" "}
                       <span className="text-slate-200">
-                        /bscct604/works/week-02.pdf
+                        /bscct604/works/week-03.pdf
+                      </span>{" "}
+                      หรือแบบเต็ม{" "}
+                      <span className="text-slate-200">
+                        https://yourdomain.com/bscct604/works/week-03.pdf
                       </span>
                     </p>
                   </div>
@@ -550,13 +621,13 @@ function AddLinkForm({
         <input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder="ชื่อเอกสาร (เช่น งานสัปดาห์ที่ 2)"
+          placeholder="ชื่อเอกสาร (เช่น งานสัปดาห์ที่ 3)"
           className="w-full rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:border-sky-500/60"
         />
         <input
           value={url}
           onChange={(e) => setUrl(e.target.value)}
-          placeholder="URL ไฟล์ (เช่น /bscct604/works/week-02.pdf)"
+          placeholder="URL ไฟล์ (เช่น /bscct604/works/week-03.pdf)"
           className="w-full rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:border-sky-500/60"
         />
         <button
